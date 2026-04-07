@@ -2,13 +2,13 @@
 <html lang="zh-Hant">
 <head>
     <meta charset="UTF-8">
-    <title>大老二：多人連線對局</title>
+    <title>大老二：連線修正版</title>
     <style>
         :root { --bg: #0a0a0c; --neon: #00e676; --blue: #00e5ff; --red: #ff1744; }
         body { background: var(--bg); color: white; font-family: sans-serif; margin: 0; display: flex; flex-direction: column; align-items: center; min-height: 100vh; overflow: hidden; }
         #bg-canvas { position: fixed; top: 0; left: 0; width: 100%; height: 100%; z-index: -1; opacity: 0.2; }
-        #game-container { width: 98%; max-width: 1200px; display: grid; grid-template-areas: ". p2 ." "p1 table p3" ". p0 ."; grid-gap: 15px; padding: 15px; }
-        .player-slot { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(8px); border-radius: 15px; padding: 10px; text-align: center; border: 2px solid rgba(255,255,255,0.1); min-height: 130px; position: relative; }
+        #game-container { width: 98%; max-width: 1200px; display: grid; grid-template-areas: ". p2 ." "p1 table p3" ". p0 ."; grid-gap: 15px; padding: 10px; }
+        .player-slot { background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(8px); border-radius: 15px; padding: 10px; text-align: center; border: 2px solid rgba(255,255,255,0.1); min-height: 140px; }
         .active { border-color: var(--neon); box-shadow: 0 0 15px rgba(0, 230, 118, 0.3); }
         .p2 { grid-area: p2; } .p1 { grid-area: p1; } .p3 { grid-area: p3; } .p0 { grid-area: p0; }
         #center-table { grid-area: table; background: radial-gradient(circle, #0e2f1f 0%, #050e0a 100%); border: 6px solid #222; border-radius: 25px; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 200px; }
@@ -18,29 +18,29 @@
         .card.red { color: var(--red); }
         .card.selected { transform: translateY(-20px); z-index: 100; border: 2px solid var(--neon); }
         .card.back { background: #1a2a3a; color: transparent !important; border: 1px solid var(--blue); }
-        #last-move .card { margin-left: 5px; }
+        #last-move .card { margin-left: 5px; } /* 修正桌面的牌不要重疊 */
         .controls { margin-top: 10px; display: flex; gap: 8px; justify-content: center; }
         button { padding: 8px 16px; border-radius: 10px; border: none; background: #ef6c00; color: white; font-weight: bold; cursor: pointer; }
-        button:disabled { background: #444; cursor: not-allowed; }
+        button:disabled { background: #444; opacity: 0.5; }
         #status-bar { background: rgba(0,0,0,0.8); padding: 5px 20px; border-radius: 20px; margin: 10px; border: 1px solid var(--blue); }
     </style>
 </head>
 <body>
     <canvas id="bg-canvas"></canvas>
-    <div id="status-bar">正在連線至雲端... <span id="my-id"></span></div>
+    <div id="status-bar">連線中... <span id="my-id">等待分配角色</span></div>
 
     <div id="game-container">
-        <div class="player-slot p2" id="slot-2">玩家 2 (<span id="cnt-2">0</span>) <div id="hand-2" class="hand"></div></div>
-        <div class="player-slot p1" id="slot-1">玩家 1 (<span id="cnt-1">0</span>) <div id="hand-1" class="hand"></div></div>
+        <div class="player-slot p2" id="slot-2">玩家 2 (0) <div class="hand"></div></div>
+        <div class="player-slot p1" id="slot-1">玩家 1 (0) <div class="hand"></div></div>
         <div id="center-table">
             <div id="last-move" class="hand"></div>
-            <div id="table-info" style="color:var(--neon); font-size:12px;">等待玩家加入...</div>
-            <button id="start-btn" style="display:none; margin-top:10px;">開始遊戲</button>
+            <div id="table-info" style="color:var(--neon); font-size:12px;">等待開局...</div>
+            <button id="start-btn" style="display:none; margin-top:10px;">開始遊戲 (玩家0專用)</button>
         </div>
-        <div class="player-slot p3" id="slot-3">玩家 3 (<span id="cnt-3">0</span>) <div id="hand-3" class="hand"></div></div>
+        <div class="player-slot p3" id="slot-3">玩家 3 (0) <div class="hand"></div></div>
         <div class="player-slot p0" id="slot-0">
-            你是玩家 0 (<span id="cnt-0">0</span>)
-            <div id="hand-0" class="hand"></div>
+            你是玩家 (0)
+            <div class="hand"></div>
             <div class="controls">
                 <button id="play-btn" disabled>出牌</button>
                 <button id="pass-btn" disabled>Pass</button>
@@ -50,7 +50,7 @@
 
 <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js";
-    import { getDatabase, ref, set, onValue, update, runTransaction, onDisconnect } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
+    import { getDatabase, ref, set, onValue, update, runTransaction } from "https://www.gstatic.com/firebasejs/10.8.0/firebase-database.js";
 
     const firebaseConfig = {
         apiKey: "AIzaSyC7UKRDDKFcWxx_WXg9NN4jDxZNJg8NHoc",
@@ -70,89 +70,56 @@
     let gameState = null;
     const SUITS = ['♣', '♦', '♥', '♠'], RANKS = ['3','4','5','6','7','8','9','10','J','Q','K','A','2'];
 
-    // 1. 加入房間邏輯
     async function joinRoom() {
-        const userRef = ref(db, 'game_room/players_count');
-        const result = await runTransaction(userRef, (current) => {
-            if (current === null) return 0;
-            if (current >= 4) return; // 滿了
-            return current + 1;
+        const result = await runTransaction(ref(db, 'game_room/players_count'), (current) => {
+            return (current === null) ? 0 : (current < 4 ? current + 1 : current);
         });
-
-        if (result.committed) {
-            myPlayerIndex = result.snapshot.val() || 0;
-            document.getElementById('my-id').innerText = `你的身份：玩家 ${myPlayerIndex}`;
-            document.getElementById(`slot-0`).innerHTML = `你是玩家 ${myPlayerIndex} (<span id="cnt-0">0</span>) <div id="hand-0" class="hand"></div> <div class="controls"><button id="play-btn">出牌</button><button id="pass-btn">Pass</button></div>`;
-            
-            // 如果是玩家 0，顯示開始按鈕
-            if (myPlayerIndex === 0) document.getElementById('start-btn').style.display = 'block';
-        } else {
-            alert("房間已滿，請稍後再試！");
-        }
+        myPlayerIndex = result.snapshot.val();
+        document.getElementById('my-id').innerText = `你的身份：玩家 ${myPlayerIndex}`;
+        if (myPlayerIndex === 0) document.getElementById('start-btn').style.display = 'block';
     }
 
-    // 2. 洗牌與初始化資料庫
     document.getElementById('start-btn').onclick = () => {
         let deck = [];
         for(let r=0; r<13; r++) for(let s=0; s<4; s++) deck.push({s, r, suit:SUITS[s], rank:RANKS[r], power:r*4+s});
         deck.sort(() => Math.random() - 0.5);
-
-        let hands = [];
-        let firstTurn = 0;
+        let hands = []; let turn = 0;
         for(let i=0; i<4; i++) {
             hands[i] = deck.slice(i*13, (i+1)*13).sort((a,b) => a.power - b.power);
-            if(hands[i].some(c => c.s===0 && c.r===0)) firstTurn = i;
+            if(hands[i].some(c => c.s===0 && c.r===0)) turn = i;
         }
-
-        update(gameRef, {
-            hands: hands,
-            lastMove: [],
-            turn: firstTurn,
-            passCount: 0,
-            isFirstRound: true,
-            status: 'playing'
-        });
+        update(gameRef, { hands, lastMove: [], turn, passCount: 0, isFirst: true, status: 'playing' });
         document.getElementById('start-btn').style.display = 'none';
     };
 
-    // 3. 監聽資料庫更新畫面
     onValue(gameRef, (snapshot) => {
         gameState = snapshot.val();
-        if (!gameState) return;
-        render();
+        if (gameState && gameState.status === 'playing') render();
     });
 
     function render() {
-        if (!gameState.hands) return;
-        
-        // 渲染四個玩家的牌
         for (let i = 0; i < 4; i++) {
-            // 邏輯轉換：把雲端玩家 i 對應到畫面上的位置
-            // 讓「我」永遠在下方 slot-0
+            // 修正位置：讓當前玩家永遠在 p0 (下方)
             let displayPos = (i - myPlayerIndex + 4) % 4;
-            const handEl = document.querySelector(`.p${displayPos} .hand`);
-            const cntEl = document.getElementById(`cnt-${displayPos}`);
-            const slotEl = document.getElementById(`slot-${displayPos}`);
-
+            const slot = document.getElementById(`slot-${displayPos}`);
+            const handEl = slot.querySelector('.hand');
+            
+            slot.childNodes[0].textContent = (i === myPlayerIndex) ? `你是玩家 ${i} ` : `玩家 ${i} `;
+            slot.querySelector('span') ? slot.querySelector('span').innerText = `(${gameState.hands[i].length})` : null;
+            
             handEl.innerHTML = '';
-            let currentHand = gameState.hands[i] || [];
-            currentHand.forEach((c, idx) => {
+            gameState.hands[i].forEach((c, idx) => {
                 const div = document.createElement('div');
-                // 只有自己的牌是正面的
                 if (i === myPlayerIndex) {
                     div.className = `card ${c.s===1||c.s===2?'red':''}`;
                     div.innerHTML = `<span>${c.suit}</span><span>${c.rank}</span><span>${c.suit}</span>`;
                     div.onclick = () => div.classList.toggle('selected');
-                } else {
-                    div.className = `card back`;
-                }
+                } else { div.className = `card back`; }
                 handEl.appendChild(div);
             });
-            cntEl.innerText = currentHand.length;
-            slotEl.classList.toggle('active', gameState.turn === i);
+            slot.classList.toggle('active', gameState.turn === i);
         }
 
-        // 渲染桌面
         const tableEl = document.getElementById('last-move');
         tableEl.innerHTML = '';
         (gameState.lastMove || []).forEach(c => {
@@ -162,58 +129,28 @@
             tableEl.appendChild(div);
         });
 
-        // 控制按鈕
-        const isMyTurn = gameState.turn === myPlayerIndex;
-        document.getElementById('play-btn').disabled = !isMyTurn;
-        document.getElementById('pass-btn').disabled = (!isMyTurn || (gameState.lastMove || []).length === 0);
-        document.getElementById('table-info').innerText = isMyTurn ? "輪到你出牌！" : `等待玩家 ${gameState.turn} 出牌...`;
+        const isTurn = gameState.turn === myPlayerIndex;
+        document.getElementById('play-btn').disabled = !isTurn;
+        document.getElementById('pass-btn').disabled = (!isTurn || (gameState.lastMove || []).length === 0);
+        document.getElementById('table-info').innerText = isTurn ? "輪到你了！" : `等待玩家 ${gameState.turn}...`;
     }
 
-    // 4. 出牌動作
-    document.addEventListener('click', (e) => {
-        if (e.target.id === 'play-btn') {
-            const selIdx = [];
-            const cards = document.querySelectorAll('#hand-0 .card');
-            cards.forEach((el, i) => { if(el.classList.contains('selected')) selIdx.push(i); });
-            
-            const selectedCards = selIdx.map(i => gameState.hands[myPlayerIndex][i]);
-            if (validateMove(selectedCards)) {
-                let newHands = [...gameState.hands];
-                newHands[myPlayerIndex] = newHands[myPlayerIndex].filter((_, i) => !selIdx.includes(i));
-                
-                update(gameRef, {
-                    hands: newHands,
-                    lastMove: selectedCards,
-                    turn: (gameState.turn + 1) % 4,
-                    passCount: 0,
-                    isFirstRound: false
-                });
-            }
+    document.getElementById('play-btn').onclick = () => {
+        const selIdx = [];
+        document.querySelectorAll('#slot-0 .card').forEach((el, i) => { if(el.classList.contains('selected')) selIdx.push(i); });
+        const selected = selIdx.map(i => gameState.hands[myPlayerIndex][i]);
+        
+        if (selected.length > 0) { // 這裡暫時簡化判斷
+            let newHands = [...gameState.hands];
+            newHands[myPlayerIndex] = newHands[myPlayerIndex].filter((_, i) => !selIdx.includes(i));
+            update(gameRef, { hands: newHands, lastMove: selected, turn: (gameState.turn + 1) % 4, passCount: 0, isFirst: false });
         }
+    };
 
-        if (e.target.id === 'pass-btn') {
-            let newPassCount = gameState.passCount + 1;
-            let nextLastMove = gameState.lastMove;
-            if (newPassCount >= 3) {
-                nextLastMove = [];
-                newPassCount = 0;
-            }
-            update(gameRef, {
-                turn: (gameState.turn + 1) % 4,
-                passCount: newPassCount,
-                lastMove: nextLastMove
-            });
-        }
-    });
-
-    function validateMove(cards) {
-        if (cards.length === 0) return false;
-        // 這裡可加入之前寫的 getCombo 牌型判斷 (簡化版)
-        if (gameState.isFirstRound && !cards.some(c => c.s===0 && c.r===0)) {
-            alert("首抽必含梅花3"); return false;
-        }
-        return true; // 實戰中需補上牌型判斷
-    }
+    document.getElementById('pass-btn').onclick = () => {
+        let pc = gameState.passCount + 1;
+        update(gameRef, { turn: (gameState.turn + 1) % 4, passCount: pc, lastMove: (pc >= 3 ? [] : gameState.lastMove) });
+    };
 
     joinRoom();
 </script>
